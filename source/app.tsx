@@ -5,12 +5,17 @@ import {ShortcutClient} from '@shortcut/client';
 import fs from 'node:fs';
 import path from 'node:path';
 import {marked} from 'marked';
+import crypto from 'node:crypto';
 
 type Site = {
 	apiKey: string;
 	name: string;
 	slug: string;
 	objectiveId: number;
+};
+
+type SiteContext = Site & {
+	images: {url: string; filename: string; promise: Promise<void>}[];
 };
 
 const AppStateContext = React.createContext<{
@@ -181,7 +186,124 @@ const CreateSite = () => {
 	);
 };
 
-async function generateSite(site: Site) {
+const downloadImage = (site: SiteContext, url: string) => {
+	const filename = `${crypto.randomBytes(16).toString('hex')}${
+		path.parse(url).ext
+	}`;
+
+	if (!fs.existsSync(path.resolve(`./sites/${site.name}/imgs/`)))
+		fs.mkdirSync(path.resolve(`./sites/${site.name}/imgs/`));
+
+	async function downloadImg() {
+		try {
+			const res = await fetch(`${url}?token=${site.apiKey}`);
+			if (!res.ok) throw new Error();
+			const buffer = await res.arrayBuffer();
+			fs.writeFileSync(
+				path.resolve(`./sites/${site.name}/imgs/${filename}`),
+				Buffer.from(buffer),
+			);
+		} catch {}
+	}
+
+	const image = {url, filename, promise: downloadImg()};
+
+	site.images.push(image);
+
+	return filename;
+};
+
+const parseDescription = (site: SiteContext, description: string) => {
+	description = description.replace(
+		/!\[(.*)\]\((.+)\)/gm,
+		(match, alt, src) => {
+			if (src.startsWith('https://media.app.shortcut.com/')) {
+				const filename = downloadImage(site, src);
+				return `![${alt}](/imgs/${filename})`;
+			}
+
+			return match;
+		},
+	);
+
+	return marked.parse(description);
+};
+
+const getStyles = () => `<style>
+	html {
+		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+		font-size: 16px;
+		line-height: 1.5;
+		-webkit-font-smoothing: antialiased;
+		-moz-osx-font-smoothing: grayscale;
+	}
+
+	body {
+		margin: 0;
+		padding: 0;
+	}
+
+	header {
+		background-color: #f5f5f5;
+		padding: 1rem;
+	}
+
+	main {
+		padding: 1rem;
+	}
+
+	header nav {
+		display: flex;
+		flex-direction: row;
+		gap: 1rem;
+	}
+
+	main nav {
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+	}
+
+	main nav a::before {
+		content: '✎ ';
+	}
+
+	table {
+		border: 1px solid #ccc;
+		border-collapse: collapse;
+		width: 100%;
+	}
+
+	tbody tr:nth-child(odd) {
+		background-color: #f2f2f2;
+	}
+
+	td, th {
+		border: 1px solid #ccc;
+		padding: 0.5rem;
+		text-align: left;
+	}
+
+	a {
+		text-decoration: none;
+		color: inherit;
+	}
+
+	a:hover {
+		text-decoration: underline;
+	}
+
+	img {
+		max-width: 100%;
+	}
+
+	h1, h2 {
+		margin: 0;
+	}
+
+</style>`;
+
+async function generateSite(site: SiteContext) {
 	const client = new ShortcutClient(site.apiKey);
 	const {data: milestone} = await client.getMilestone(site.objectiveId);
 	const {data: epics} = await client.listMilestoneEpics(site.objectiveId);
@@ -199,13 +321,19 @@ async function generateSite(site: Site) {
 <html>
 	<head>
 		<title>${site.name} | Home</title>
+		${getStyles()}
 	</head>
 	<body>
+	<header>
 		<nav>
 			<a href="/">Home</a>
 			${epics.map(epic => `<a href="/${epic.id}">${epic.name}</a>`).join('')}
+		</nav>
+		</header>
+<main>
 		<h1>${site.name}</h1>
 		<p>${milestone.description}</p>
+		</main>
 	</body>
 </html>`,
 		'utf-8',
@@ -213,6 +341,7 @@ async function generateSite(site: Site) {
 
 	epics.forEach(async epic => {
 		const {data: fullEpic} = await client.getEpic(epic.id);
+
 		const {data: stories} = await client.listEpicStories(epic.id, {
 			includes_description: true,
 		});
@@ -224,49 +353,57 @@ async function generateSite(site: Site) {
 	<html>
 		<head>
 			<title>${site.name} | ${epic.name}</title>
+			${getStyles()}
 		</head>
 		<body>
+		<header>
 			<nav>
 				<a href="/">Home</a>
 				${epics.map(epic => `<a href="/${epic.id}">${epic.name}</a>`).join('')}
+			</nav>
+			</header>
+			<main>
 			<h2>${epic.name}</h2>
-			${marked.parse(fullEpic.description)}
-			${stories.length ? '<ul>' : ''}
+			${parseDescription(site, fullEpic.description)}
+			${stories.length ? '<nav>' : ''}
 			${stories
-				.map(story => {
-					fs.mkdirSync(
-						path.resolve(`./sites/${site.name}/${epic.id}/${story.id}`),
-					);
-					fs.writeFileSync(
-						path.resolve(
-							`./sites/${site.name}/${epic.id}/${story.id}/index.html`,
-						),
-						`<!doctype html>
-						<html>
-							<head>
-								<title>${site.name} | ${epic.name} | ${story.name}</title>
-							</head>
-						<body>
-							<nav>
-								<a href="/">Home</a>
-								${epics.map(epic => `<a href="/${epic.id}">${epic.name}</a>`).join('')}
-							<h2>${story.name}</h2>
-							<small>${story.updated_at || story.created_at}</small>
-							${marked.parse(story.description || '')}
-						</body>
-					</html>`,
-						'utf-8',
-					);
-
-					return `<li><a href="/${epic.id}/${story.id}">${story.name}</a></li>`;
-				})
+				.map(story => `<a href="/${epic.id}/${story.id}">${story.name}</a>`)
 				.join('')}
-			${stories.length ? '</ul>' : ''}
-			<small>Last updated:${epic.updated_at}</small>
+			${stories.length ? '</nav>' : ''}
+			<small>Last updated: ${epic.updated_at || epic.created_at}</small>
+			</main>
 		</body>
 	</html>`,
 			'utf-8',
 		);
+
+		stories.forEach(story => {
+			fs.mkdirSync(path.resolve(`./sites/${site.name}/${epic.id}/${story.id}`));
+			fs.writeFileSync(
+				path.resolve(`./sites/${site.name}/${epic.id}/${story.id}/index.html`),
+				`<!doctype html>
+				<html>
+					<head>
+						<title>${site.name} | ${epic.name} | ${story.name}</title>
+						${getStyles()}
+					</head>
+				<body>
+				<header>
+					<nav>
+						<a href="/">Home</a>
+						${epics.map(epic => `<a href="/${epic.id}">${epic.name}</a>`).join('')}
+					</nav></header>
+					<main>
+					<a href="/${epic.id}">&larr; Back</a>
+					<h2>${story.name}</h2>
+					<small>${story.updated_at || story.created_at}</small>
+					${parseDescription(site, story.description || '')}
+					</main>
+				</body>
+			</html>`,
+				'utf-8',
+			);
+		});
 	});
 }
 
@@ -275,6 +412,10 @@ const SitePicker = () => {
 	const {exit} = Ink.useApp();
 	const [isGenerating, setIsGenerating] = React.useState(false);
 	const [isDone, setIsDone] = React.useState(false);
+
+	React.useEffect(() => {
+		if (isDone) exit();
+	}, [isDone, exit]);
 
 	if (!sites.length) {
 		return (
@@ -302,10 +443,13 @@ const SitePicker = () => {
 							onConfirm={async () => {
 								setIsGenerating(true);
 								try {
-									await generateSite(sites[0] as Site);
-									setIsDone(true);
-									exit();
-								} finally {
+									const context = {...sites[0], images: []} as SiteContext;
+									await generateSite(context);
+									Promise.all(context.images.map(i => i.promise)).then(() => {
+										setIsDone(true);
+										context.images = [];
+									});
+								} catch {
 									setIsGenerating(false);
 								}
 							}}
