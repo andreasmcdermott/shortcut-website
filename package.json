@@ -10,7 +10,7 @@
 	"scripts": {
 		"build": "tsc",
 		"dev": "tsc --watch",
-		"test": "prettier --check . && xo && ava"
+		"serve": "npx http-server ./sites/Amcd"
 	},
 	"files": [
 		"dist"
