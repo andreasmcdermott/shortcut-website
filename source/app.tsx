@@ -152,7 +152,7 @@ const CreateSite = () => {
 
 								setIsCreating(true);
 								const milestone = await clientRef.current!.createMilestone({
-									name: '[Shortcut Website Builder] This Objective controls your website!',
+									name: `Website: ${name}`,
 									description:
 										'Each Epic in this Objective will be a separate page.',
 								});
@@ -320,7 +320,7 @@ async function generateSite(site: SiteContext) {
 		`<!doctype html>
 <html>
 	<head>
-		<title>${site.name} | Home</title>
+		<title>${milestone.name} | Home</title>
 		${getStyles()}
 	</head>
 	<body>
@@ -331,7 +331,7 @@ async function generateSite(site: SiteContext) {
 		</nav>
 		</header>
 <main>
-		<h1>${site.name}</h1>
+		<h1>${milestone.name}</h1>
 		<p>${milestone.description}</p>
 		</main>
 	</body>
